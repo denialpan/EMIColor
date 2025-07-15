@@ -18,6 +18,10 @@ group = mod_group_id
 
 repositories {
     // Add here additional repositories if required by some of the dependencies below.
+    maven {
+        name = "TerraformersMC"
+        url = "https://maven.terraformersmc.com/"
+    }
 }
 
 base {
@@ -117,6 +121,31 @@ dependencies {
     // For more info:
     // http://www.gradle.org/docs/current/userguide/artifact_dependencies_tutorial.html
     // http://www.gradle.org/docs/current/userguide/dependency_management.html
+
+    // NeoForge
+
+    def emi_version = "1.1.22+1.21.1"
+
+    compileOnly "dev.emi:emi-neoforge:${emi_version}"
+    runtimeOnly "dev.emi:emi-neoforge:${emi_version}"
+
+    compileOnly files("libs/Modern-Industrialization-2.3.9.jar")
+    runtimeOnly files("libs/Modern-Industrialization-2.3.9.jar")
+
+    compileOnly files("libs/guideme-21.1.13.jar")
+    runtimeOnly files("libs/guideme-21.1.13.jar")
+
+    compileOnly files("libs/emi_loot-0.7.6+1.21+neoforge.jar")
+    runtimeOnly files("libs/emi_loot-0.7.6+1.21+neoforge.jar")
+
+    compileOnly files("libs/fzzy_config-0.7.1+1.21+neoforge.jar")
+    runtimeOnly files("libs/fzzy_config-0.7.1+1.21+neoforge.jar")
+
+
+    compileOnly files("libs/kotlinforforge-5.9.0-all.jar")
+    runtimeOnly files("libs/kotlinforforge-5.9.0-all.jar")
+
+
 }
 
 // This block of code expands all declared replace properties in the specified resource targets.
