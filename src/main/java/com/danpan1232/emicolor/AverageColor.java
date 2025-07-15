@@ -16,7 +16,6 @@ import net.minecraft.util.RandomSource;
 import net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.neoforge.client.model.data.ModelData;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.minecraft.server.packs.resources.SimplePreparableReloadListener;
@@ -27,48 +26,11 @@ import net.minecraft.util.profiling.ProfilerFiller;
 //import java.io.File;
 import java.io.InputStream;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @EventBusSubscriber(modid = EMIColor.MOD_ID, value = Dist.CLIENT)
 public class AverageColor {
 
     public static final Map<Block, String> debugTooltipMap = new HashMap<>();
-
-    @SubscribeEvent
-    public static void onClientSetup(FMLClientSetupEvent event) {
-        event.enqueueWork(() -> {
-            Minecraft mc = Minecraft.getInstance();
-            BlockRenderDispatcher dispatcher = mc.getBlockRenderer();
-
-            for (Block block : BuiltInRegistries.BLOCK) {
-                BlockState state = block.defaultBlockState();
-                BakedModel model = dispatcher.getBlockModel(state);
-                if (model == null) {
-                    continue;
-                }
-
-
-                RandomSource rand = RandomSource.create();
-                ModelData modelData = ModelData.EMPTY;
-
-                List<BakedQuad> quads = new ArrayList<>();
-                for (Direction dir : Direction.values()) {
-                    quads.addAll(model.getQuads(state, dir, rand, modelData, null));
-                }
-                quads.addAll(model.getQuads(state, null, rand, modelData, null));
-
-                Set<String> spriteNames = quads.stream()
-                        .map(q -> q.getSprite().contents().name().toString())
-                        .collect(Collectors.toSet());
-
-                // join texture names into one line for debug
-                String tooltip = String.join(", ", spriteNames);
-
-                // save into tooltip for EMI
-                debugTooltipMap.put(block, tooltip);
-            }
-        });
-    }
 
     @SubscribeEvent
     public static void onRegisterReloadListeners(RegisterClientReloadListenersEvent event) {
@@ -80,48 +42,61 @@ public class AverageColor {
 
             @Override
             protected void apply(Void preparation, ResourceManager resourceManager, ProfilerFiller profiler) {
-                Minecraft mc = Minecraft.getInstance();
-                BlockRenderDispatcher dispatcher = mc.getBlockRenderer();
-//                File debugDir = new File("swausbobbytextures");
-//                debugDir.mkdirs();
+                // one tick after, hacky way to solve java memory access fighting with Iris
+                Minecraft.getInstance().execute(() -> {
+                    Minecraft mc = Minecraft.getInstance();
+                    BlockRenderDispatcher dispatcher = mc.getBlockRenderer();
 
-                AverageColor.debugTooltipMap.clear();
+                    AverageColor.debugTooltipMap.clear();
 
-                for (Block block : BuiltInRegistries.BLOCK) {
-                    BlockState state = block.defaultBlockState();
-                    BakedModel model = dispatcher.getBlockModel(state);
-                    if (model == null) continue;
+                    Map<ResourceLocation, NativeImage> textureCache = new HashMap<>();
+                    Set<ResourceLocation> usedTextures = new HashSet<>();
 
-                    RandomSource rand = RandomSource.create();
-                    ModelData modelData = ModelData.EMPTY;
+                    for (Block block : BuiltInRegistries.BLOCK) {
+                        BlockState state = block.defaultBlockState();
+                        if (state.isAir()) continue;
 
-                    // Total across all textures for this block
-                    long totalR = 0, totalG = 0, totalB = 0, totalCount = 0;
+                        BakedModel model = dispatcher.getBlockModel(state);
+                        if (model == null) continue;
 
-                    for (Direction dir : Direction.values()) {
-                        List<BakedQuad> quads = model.getQuads(state, dir, rand, modelData, null);
-                        if (quads.isEmpty()) continue;
+                        RandomSource rand = RandomSource.create();
+                        ModelData modelData = ModelData.EMPTY;
 
-                        for (BakedQuad quad : quads) {
-                            TextureAtlasSprite sprite = quad.getSprite();
-                            ResourceLocation spriteId = sprite.contents().name();
+                        long totalR = 0, totalG = 0, totalB = 0, totalCount = 0;
+                        Set<ResourceLocation> alreadyProcessedTextures = new HashSet<>();
 
-                            String path = spriteId.getPath();
+                        for (Direction dir : Direction.values()) {
+                            List<BakedQuad> quads = model.getQuads(state, dir, rand, modelData, null);
+                            if (quads.isEmpty()) continue;
 
-                            ResourceLocation texturePath = ResourceLocation.fromNamespaceAndPath(
-                                    spriteId.getNamespace(), "textures/" + path + ".png"
-                            );
+                            for (BakedQuad quad : quads) {
+                                TextureAtlasSprite sprite = quad.getSprite();
+                                ResourceLocation spriteId = sprite.contents().name();
 
-                            Optional<Resource> resOpt = mc.getResourceManager().getResource(texturePath);
-                            if (resOpt.isEmpty()) continue;
+                                ResourceLocation texturePath = ResourceLocation.fromNamespaceAndPath(
+                                        spriteId.getNamespace(), "textures/" + spriteId.getPath() + ".png"
+                                );
 
-                            try (InputStream stream = resOpt.get().open()) {
-                                NativeImage image = NativeImage.read(stream);
+                                if (!alreadyProcessedTextures.add(texturePath)) continue;
+
+                                NativeImage image = textureCache.get(texturePath);
+                                if (image == null) {
+                                    Optional<Resource> resOpt = mc.getResourceManager().getResource(texturePath);
+                                    if (resOpt.isEmpty()) continue;
+
+                                    try (InputStream stream = resOpt.get().open()) {
+                                        image = NativeImage.read(stream);
+                                        textureCache.put(texturePath, image);
+                                        usedTextures.add(texturePath);
+                                    } catch (Exception e) {
+                                        System.err.println("Error reading texture: " + texturePath);
+                                        e.printStackTrace();
+                                        continue;
+                                    }
+                                }
+
                                 int width = image.getWidth();
                                 int height = image.getHeight();
-
-//                                File out = new File(debugDir, spriteId.getNamespace() + "_" + block.getName().getString().replace(" ", "_") + "_" + dir.getName() + ".png");
-//                                image.writeToFile(out);
 
                                 for (int y = 0; y < height; y++) {
                                     for (int x = 0; x < width; x++) {
@@ -131,7 +106,6 @@ public class AverageColor {
                                         int b = (rgba >> 16) & 0xFF;
                                         int a = (rgba >> 24) & 0xFF;
 
-
                                         if (a < 32) continue;
 
                                         totalR += r;
@@ -140,24 +114,27 @@ public class AverageColor {
                                         totalCount++;
                                     }
                                 }
-
-                            } catch (Exception e) {
-                                System.err.println("Error reading texture: " + texturePath);
-                                e.printStackTrace();
                             }
+                        }
+
+                        if (totalCount > 0) {
+                            int avgR = (int)(totalR / totalCount);
+                            int avgG = (int)(totalG / totalCount);
+                            int avgB = (int)(totalB / totalCount);
+                            String hex = String.format("%s: #%02X%02X%02X", block.getName().getString(), avgR, avgG, avgB);
+                            AverageColor.debugTooltipMap.put(block, hex);
+                            System.out.println("average color " + BuiltInRegistries.BLOCK.getKey(block) + ": " + hex);
                         }
                     }
 
-                    if (totalCount > 0) {
-                        int avgR = (int)(totalR / totalCount);
-                        int avgG = (int)(totalG / totalCount);
-                        int avgB = (int)(totalB / totalCount);
-                        String hex = String.format("%s: #%02X%02X%02X", block.getName().getString(), avgR, avgG, avgB);
-
-                        AverageColor.debugTooltipMap.put(block, hex);
-                        System.out.println("average color " + BuiltInRegistries.BLOCK.getKey(block) + ": " + hex);
+                    // explicitly free memory
+                    for (ResourceLocation tex : usedTextures) {
+                        NativeImage img = textureCache.get(tex);
+                        if (img != null) img.close();
                     }
-                }
+                    textureCache.clear();
+                    usedTextures.clear();
+                });
             }
 
         });
